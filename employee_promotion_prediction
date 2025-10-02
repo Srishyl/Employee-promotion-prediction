@@ -1,1 +1,78 @@
+import pandas as pd
+import numpy as np
+import gradio as gr
+import datetime
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+import joblib
+import re
+
+
+df = pd.read_csv("/content/employee_promotions.csv") 
+
+
+df["promoted"] = df["promoted"].astype(str).str.strip().str.lower()
+df["promoted"] = df["promoted"].map({"yes": 1, "no": 0})
+
+df["date_of_birth"] = pd.to_datetime(df["date_of_birth"], errors="coerce", dayfirst=True)
+df["date_of_joining"] = pd.to_datetime(df["date_of_joining"], errors="coerce", dayfirst=True)
+
+today = pd.to_datetime("today")
+df["age"] = today.year - df["date_of_birth"].dt.year
+df["years_at_company"] = today.year - df["date_of_joining"].dt.year
+
+le_gender = LabelEncoder()
+df["gender"] = le_gender.fit_transform(df["gender"].astype(str))
+
+X = df[["age", "years_at_company", "gender"]]
+y = df["promoted"]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+model = RandomForestClassifier(n_estimators=200, random_state=42)
+model.fit(X_train_scaled, y_train)
+
+joblib.dump((model, scaler, le_gender), "promotion_model.pkl")
+
+
+def predict_promotion(text):
+    model, scaler, le_gender = joblib.load("promotion_model.pkl")
+
+    dob_match = re.search(r"dob\s*[:\-]?\s*(\d{2}-\d{2}-\d{4})", text, re.I)
+    doj_match = re.search(r"doj\s*[:\-]?\s*(\d{2}-\d{2}-\d{4})", text, re.I)
+    gender_match = re.search(r"(male|female)", text, re.I)
+
+    if not dob_match or not doj_match or not gender_match:
+        return "❗ Please enter details as: DOB: DD-MM-YYYY, DOJ: DD-MM-YYYY, Gender: male/female"
+
+    dob = pd.to_datetime(dob_match.group(1), errors="coerce", dayfirst=True)
+    doj = pd.to_datetime(doj_match.group(1), errors="coerce", dayfirst=True)
+    gender = gender_match.group(1).lower()
+
+    today = pd.to_datetime("today")
+    age = today.year - dob.year
+    years_at_company = today.year - doj.year
+    gender_val = le_gender.transform([gender])[0]
+
+    input_data = np.array([[age, years_at_company, gender_val]])
+    input_scaled = scaler.transform(input_data)
+
+    pred = model.predict(input_scaled)[0]
+    return "✅ Promoted: Yes 🎉" if pred == 1 else "❌ Promoted: No"
+
+
+demo = gr.Interface(
+    fn=predict_promotion,
+    inputs=gr.Textbox(label="Enter Employee Details", placeholder="Example: DOB: 01-03-1988, DOJ: 01-01-2020, Gender: female"),
+    outputs="text",
+    title="👔 Employee Promotion Predictor"
+)
+
+if __name__ == "__main__":
+    demo.launch()
 
